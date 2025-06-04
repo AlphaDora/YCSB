@@ -324,6 +324,12 @@ public final class Client {
       statusthread.start();
     }
 
+    long warmupTime = Long.valueOf(props.getProperty("warmuptime", "0"));
+    if (warmupTime < 0) {
+      //warmup time is negative, so we don't want to run the workload
+      System.exit(0);
+    }
+
     Thread terminator = null;
     long st;
     long en;
@@ -387,9 +393,11 @@ public final class Client {
       System.exit(0);
     }
 
+    long actualRuntime = en - st - warmupTime;
+    
     try {
       try (final TraceScope span = tracer.newScope(CLIENT_EXPORT_MEASUREMENTS_SPAN)) {
-        exportMeasurements(props, opsDone, en - st);
+        exportMeasurements(props, opsDone, actualRuntime);
       }
     } catch (IOException e) {
       System.err.println("Could not export measurements, error: " + e.getMessage());

@@ -22,6 +22,8 @@ import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.LockSupport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A thread for executing transactions or data inserts to the database.
@@ -29,6 +31,12 @@ import java.util.concurrent.locks.LockSupport;
 public class ClientThread implements Runnable {
   // Counts down each of the clients completing.
   private final CountDownLatch completeLatch;
+
+  private static final Logger LOG = LoggerFactory.getLogger(ClientThread.class);
+  // Warm-up duration
+  private static final String WARMUP_TIME_PROPERTY = "warmuptime";
+  private long warmupTime;
+  private boolean isWarmupPhase;
 
   private static boolean spinSleep;
   private DB db;
@@ -68,6 +76,7 @@ public class ClientThread implements Runnable {
       targetOpsTickNs = (long) (1000000 / targetOpsPerMs);
     }
     this.props = props;
+    this.warmupTime = Long.valueOf(this.props.getProperty(WARMUP_TIME_PROPERTY, "0"));
     measurements = Measurements.getMeasurements();
     spinSleep = Boolean.valueOf(this.props.getProperty("spin.sleep", "false"));
     this.completeLatch = completeLatch;
@@ -81,8 +90,35 @@ public class ClientThread implements Runnable {
     threadcount = threadCount;
   }
 
+  public long getWarmuptime() {
+    return warmupTime;
+  }
+
   public int getOpsDone() {
     return opsdone;
+  }
+
+  public void doWarmup() {
+    long warmupStartTime = System.currentTimeMillis();
+    while (isWarmupPhase && (System.currentTimeMillis() - warmupStartTime) < warmupTime) {
+      try {
+        if (dotransactions) {
+          if (!workload.doTransaction(db, workloadstate)) {
+            break;
+          }
+        } else {
+          if (!workload.doInsert(db, workloadstate)) {
+            break;
+          }
+        }
+      } catch (Exception e) {
+        e.printStackTrace();
+        break;
+      }
+    }
+    isWarmupPhase = false;
+    opsdone = 0;
+    LOG.info("Warmup end for {} ms.", this.warmupTime);
   }
 
   @Override
@@ -102,6 +138,9 @@ public class ClientThread implements Runnable {
       e.printStackTrace(System.out);
       return;
     }
+
+    // do warmup to ensure that the system has reached a steady state
+    doWarmup();
 
     //NOTE: Switching to using nanoTime and parkNanos for time management here such that the measurements
     // and the client thread have the same view on time.
