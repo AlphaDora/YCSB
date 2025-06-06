@@ -52,6 +52,11 @@ public class ClientThread implements Runnable {
   private Properties props;
   private long targetOpsTickNs;
   private final Measurements measurements;
+  
+  // Dynamic load control
+  private DynamicLoadController dynamicLoadController;
+  private boolean useDynamicLoad;
+  private long lastThroughputUpdate;
 
   /**
    * Constructor.
@@ -80,6 +85,14 @@ public class ClientThread implements Runnable {
     measurements = Measurements.getMeasurements();
     spinSleep = Boolean.valueOf(this.props.getProperty("spin.sleep", "false"));
     this.completeLatch = completeLatch;
+    
+    // Initialize dynamic load control
+    this.useDynamicLoad = Boolean.parseBoolean(props.getProperty("dynamicload.enabled", "false"));
+    this.lastThroughputUpdate = 0;
+    if (useDynamicLoad) {
+      // Dynamic load controller will be set later by the Client
+      LOG.info("Dynamic load control enabled for thread {}", threadid);
+    }
   }
 
   public void setThreadId(final int threadId) {
@@ -96,6 +109,40 @@ public class ClientThread implements Runnable {
 
   public int getOpsDone() {
     return opsdone;
+  }
+  
+  /**
+   * Set the dynamic load controller for this thread.
+   */
+  public void setDynamicLoadController(DynamicLoadController controller) {
+    this.dynamicLoadController = controller;
+  }
+  
+  /**
+   * Update target throughput based on dynamic load controller.
+   */
+  private void updateDynamicThroughput() {
+    if (!useDynamicLoad || dynamicLoadController == null) {
+      return;
+    }
+    
+    long currentTime = System.currentTimeMillis();
+    // Update throughput every 100ms to avoid too frequent updates
+    if (currentTime - lastThroughputUpdate >= 100) {
+      double newTotalThroughput = dynamicLoadController.getCurrentThroughput();
+      double newTargetOpsPerMs = newTotalThroughput / threadcount / 1000.0;
+      
+      if (newTargetOpsPerMs > 0 && Math.abs(newTargetOpsPerMs - targetOpsPerMs) > 0.001) {
+        targetOpsPerMs = newTargetOpsPerMs;
+        targetOpsTickNs = (long) (1000000 / targetOpsPerMs);
+        lastThroughputUpdate = currentTime;
+        
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Thread {} updated target throughput to {:.2f} ops/ms", 
+                   threadid, targetOpsPerMs);
+        }
+      }
+    }
   }
 
   public void doWarmup() {
@@ -157,6 +204,8 @@ public class ClientThread implements Runnable {
         long startTimeNanos = System.nanoTime();
 
         while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
+          // Update dynamic throughput if enabled
+          updateDynamicThroughput();
 
           if (!workload.doTransaction(db, workloadstate)) {
             break;
@@ -170,6 +219,8 @@ public class ClientThread implements Runnable {
         long startTimeNanos = System.nanoTime();
 
         while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
+          // Update dynamic throughput if enabled
+          updateDynamicThroughput();
 
           if (!workload.doInsert(db, workloadstate)) {
             break;

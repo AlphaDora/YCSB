@@ -150,6 +150,11 @@ public final class Client {
   public static final String LABEL_PROPERTY = "label";
 
   /**
+   * Whether to enable dynamic load control.
+   */
+  public static final String DYNAMIC_LOAD_ENABLED_PROPERTY = "dynamicload.enabled";
+
+  /**
    * An optional thread used to track progress and measure JVM stats.
    */
   private static StatusThread statusthread = null;
@@ -184,6 +189,14 @@ public final class Client {
     System.out.println("          values in the propertyfile");
     System.out.println("  -s:  show status during run (default: no status)");
     System.out.println("  -l label:  use label for status (e.g. to label one experiment out of a whole batch)");
+    System.out.println("");
+    System.out.println("Dynamic Load Control properties:");
+    System.out.println("  dynamicload.enabled: enable dynamic load control (default: false)");
+    System.out.println("  dynamicload.pattern: load pattern (CONSTANT, LINEAR, STEP, SINE_WAVE, EXPONENTIAL, CUSTOM)");
+    System.out.println("  dynamicload.initial: initial throughput (ops/sec)");
+    System.out.println("  dynamicload.final: final throughput (ops/sec)");
+    System.out.println("  dynamicload.duration: duration in milliseconds");
+    System.out.println("  dynamicload.phases: custom phases (format: start:duration:throughput:desc,...)");
     System.out.println("");
     System.out.println("Required properties:");
     System.out.println("  " + WORKLOAD_PROPERTY + ": the name of the workload class to use (e.g. " +
@@ -311,6 +324,18 @@ public final class Client {
     final List<ClientThread> clients = initDb(dbname, props, threadcount, targetperthreadperms,
         workload, tracer, completeLatch);
 
+    // Initialize dynamic load controller if enabled
+    DynamicLoadController dynamicLoadController = null;
+    boolean useDynamicLoad = Boolean.parseBoolean(props.getProperty(DYNAMIC_LOAD_ENABLED_PROPERTY, "false"));
+    if (useDynamicLoad) {
+      dynamicLoadController = DynamicLoadController.fromProperties(props);
+      // Set the controller for all client threads
+      for (ClientThread client : clients) {
+        client.setDynamicLoadController(dynamicLoadController);
+      }
+      System.err.println("Dynamic load control enabled: " + dynamicLoadController.getCurrentPhaseInfo());
+    }
+
     if (status) {
       boolean standardstatus = false;
       if (props.getProperty(Measurements.MEASUREMENT_TYPE_PROPERTY, "").compareTo("timeseries") == 0) {
@@ -321,6 +346,9 @@ public final class Client {
           Measurements.MEASUREMENT_TRACK_JVM_PROPERTY_DEFAULT).equals("true");
       statusthread = new StatusThread(completeLatch, clients, label, standardstatus, statusIntervalSeconds,
           trackJVMStats);
+      if (dynamicLoadController != null) {
+        statusthread.setDynamicLoadController(dynamicLoadController);
+      }
       statusthread.start();
     }
 

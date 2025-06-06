@@ -1,0 +1,46 @@
+# Copyright (c) 2024 YCSB contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you
+# may not use this file except in compliance with the License. You
+# may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied. See the License for the specific language governing
+# permissions and limitations under the License. See accompanying
+# LICENSE file.
+
+# Dynamic Load Workload - Custom Phases
+# This workload demonstrates dynamic load control with custom phases
+# Simulates a realistic scenario: light load -> peak hours -> maintenance -> recovery
+
+recordcount=10000
+operationcount=600000
+workload=site.ycsb.workloads.CoreWorkload
+
+# Basic workload settings
+readallfields=true
+threadcount=10
+readproportion=0.6
+updateproportion=0.4
+scanproportion=0
+insertproportion=0
+
+requestdistribution=zipfian
+
+# Dynamic load control settings - Custom phases
+dynamicload.enabled=true
+dynamicload.pattern=CUSTOM
+# Format: start_time:duration:throughput:description
+# Phase 1: Light load (0-30s, 1000 ops/sec)
+# Phase 2: Ramp up (30-60s, 3000 ops/sec)  
+# Phase 3: Peak hours (60-90s, 6000 ops/sec)
+# Phase 4: Maintenance (90-105s, 500 ops/sec)
+# Phase 5: Recovery (105-120s, 2000 ops/sec)
+dynamicload.phases=0:30000:1000:Light_Load,30000:30000:3000:Ramp_Up,60000:30000:6000:Peak_Hours,90000:15000:500:Maintenance,105000:15000:2000:Recovery
+
+# Warm-up time (10 seconds)
+warmuptime=10000 

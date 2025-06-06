@@ -43,6 +43,9 @@ public class StatusThread extends Thread {
 
   private final String label;
   private final boolean standardstatus;
+  
+  // Dynamic load controller for status reporting
+  private DynamicLoadController dynamicLoadController;
 
   // The interval for reporting status.
   private long sleeptimeNs;
@@ -93,6 +96,13 @@ public class StatusThread extends Thread {
     sleeptimeNs = TimeUnit.SECONDS.toNanos(statusIntervalSeconds);
     measurements = Measurements.getMeasurements();
     this.trackJVMStats = trackJVMStats;
+  }
+  
+  /**
+   * Set the dynamic load controller for status reporting.
+   */
+  public void setDynamicLoadController(DynamicLoadController controller) {
+    this.dynamicLoadController = controller;
   }
 
   /**
@@ -175,6 +185,11 @@ public class StatusThread extends Thread {
     }
 
     msg.append(Measurements.getMeasurements().getSummary());
+    
+    // Add dynamic load information if available
+    if (dynamicLoadController != null) {
+      msg.append(" [").append(dynamicLoadController.getCurrentPhaseInfo()).append("]");
+    }
 
     System.err.println(msg);
 
