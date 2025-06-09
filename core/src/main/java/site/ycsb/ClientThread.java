@@ -146,6 +146,7 @@ public class ClientThread implements Runnable {
   }
 
   public void doWarmup() {
+    isWarmupPhase = true;
     long warmupStartTime = System.currentTimeMillis();
     while (isWarmupPhase && (System.currentTimeMillis() - warmupStartTime) < warmupTime) {
       try {
@@ -202,33 +203,60 @@ public class ClientThread implements Runnable {
     try {
       if (dotransactions) {
         long startTimeNanos = System.nanoTime();
+        // Dynamic vs Static operation control
+        if (useDynamicLoad && dynamicLoadController != null) {
+          // Dynamic mode: ignore opcount, run until dynamic load completes
+          while (!dynamicLoadController.isCompleted() && !workload.isStopRequested()) {
+            updateDynamicThroughput();
 
-        while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
-          // Update dynamic throughput if enabled
-          updateDynamicThroughput();
+            if (!workload.doTransaction(db, workloadstate)) {
+              break;
+            }
 
-          if (!workload.doTransaction(db, workloadstate)) {
-            break;
+            opsdone++;
+            throttleNanos(startTimeNanos);
           }
+        } else {
+          // Static mode: traditional opcount-based control
+          while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
+            updateDynamicThroughput();
 
-          opsdone++;
+            if (!workload.doTransaction(db, workloadstate)) {
+              break;
+            }
 
-          throttleNanos(startTimeNanos);
+            opsdone++;
+            throttleNanos(startTimeNanos);
+          }
         }
       } else {
         long startTimeNanos = System.nanoTime();
 
-        while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
-          // Update dynamic throughput if enabled
-          updateDynamicThroughput();
+        // Dynamic vs Static operation control
+        if (useDynamicLoad && dynamicLoadController != null) {
+          // Dynamic mode: ignore opcount, run until dynamic load completes
+          while (!dynamicLoadController.isCompleted() && !workload.isStopRequested()) {
+            updateDynamicThroughput();
 
-          if (!workload.doInsert(db, workloadstate)) {
-            break;
+            if (!workload.doInsert(db, workloadstate)) {
+              break;
+            }
+
+            opsdone++;
+            throttleNanos(startTimeNanos);
           }
+        } else {
+          // Static mode: traditional opcount-based control
+          while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
+            updateDynamicThroughput();
 
-          opsdone++;
+            if (!workload.doInsert(db, workloadstate)) {
+              break;
+            }
 
-          throttleNanos(startTimeNanos);
+            opsdone++;
+            throttleNanos(startTimeNanos);
+          }
         }
       }
     } catch (Exception e) {

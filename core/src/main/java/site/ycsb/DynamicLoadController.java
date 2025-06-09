@@ -45,7 +45,7 @@ public class DynamicLoadController {
   private final long startTime;
   private final double initialThroughput;
   private final double finalThroughput;
-  private final long duration; // 总持续时间(ms)
+  private final long duration;
   private final Map<String, Object> parameters;
   private final AtomicReference<Double> currentThroughput;
   private final List<LoadPhase> customPhases;
@@ -54,9 +54,9 @@ public class DynamicLoadController {
    * Load phase definition.
    */
   public static class LoadPhase {
-    private final long startTime;    // 阶段开始时间(相对于测试开始时间，ms)
-    private final long duration;     // 阶段持续时间(ms)
-    private final double throughput; // 目标吞吐量
+    private final long startTime;
+    private final long duration;
+    private final double throughput;
     private final String description;
     
     public LoadPhase(long startTime, long duration, double throughput, String description) {
@@ -109,19 +109,51 @@ public class DynamicLoadController {
     this.startTime = System.currentTimeMillis();
     this.customPhases = new ArrayList<>(phases);
     this.parameters = new HashMap<>();
-    this.currentThroughput = new AtomicReference<>(phases.isEmpty() ? 0.0 : phases.get(0).throughput);
     
-    // 计算总持续时间
-    long maxEndTime = 0;
-    for (LoadPhase phase : phases) {
-      maxEndTime = Math.max(maxEndTime, phase.getStartTime() + phase.getDuration());
+    if (phases.isEmpty()) {
+      this.currentThroughput = new AtomicReference<>(0.0);
+      this.duration = 0;
+      this.initialThroughput = 0.0;
+      this.finalThroughput = 0.0;
+    } else {
+      // 计算总持续时间
+      long maxEndTime = 0;
+      for (LoadPhase phase : phases) {
+        long phaseEndTime = phase.getStartTime() + phase.getDuration();
+        maxEndTime = Math.max(maxEndTime, phaseEndTime);
+      }
+      this.duration = maxEndTime;
+      
+      // initialThroughput: 时间0时刻的实际吞吐量
+      this.initialThroughput = calculateCustomThroughputAtTime(0);
+      
+      // finalThroughput: 结束时刻的实际吞吐量
+      this.finalThroughput = calculateCustomThroughputAtTime(this.duration);
+      
+      this.currentThroughput = new AtomicReference<>(this.initialThroughput);
     }
-    this.duration = maxEndTime;
-    this.initialThroughput = phases.isEmpty() ? 0.0 : phases.get(0).getThroughput();
-    this.finalThroughput = phases.isEmpty() ? 0.0 : phases.get(phases.size() - 1).getThroughput();
     
-    LOG.info("Dynamic load controller initialized with {} custom phases, total duration={}ms", 
-             phases.size(), duration);
+    LOG.info("{} custom phases, total duration={}ms, initial={}ops/sec, final={}ops/sec", 
+             phases.size(), duration, initialThroughput, finalThroughput);
+  }
+  
+  /**
+   * Helper method to calculate throughput at a specific time (used for initialization).
+   */
+  private double calculateCustomThroughputAtTime(long timeMs) {
+    // 使用相同的逻辑处理重叠phases
+    double throughput = 0.0;
+    boolean foundPhase = false;
+    
+    for (LoadPhase phase : customPhases) {
+      if (timeMs >= phase.getStartTime() && timeMs < phase.getStartTime() + phase.getDuration()) {
+        throughput = phase.getThroughput();
+        foundPhase = true;
+        // 不要break，继续查找，这样后定义的phase会覆盖前面的
+      }
+    }
+    
+    return foundPhase ? throughput : 0.0;
   }
   
   /**
@@ -145,23 +177,27 @@ public class DynamicLoadController {
    * Calculate throughput based on elapsed time.
    */
   private double calculateThroughput(long elapsedMs) {
-    if (elapsedMs >= duration) {
-      return finalThroughput;
-    }
-    
-    if (elapsedMs <= 0) {
-      return initialThroughput;
-    }
-    
     switch (pattern) {
     case CONSTANT:
       return initialThroughput;
       
     case LINEAR:
+      if (elapsedMs >= duration) {
+        return finalThroughput;
+      }
+      if (elapsedMs <= 0) {
+        return initialThroughput;
+      }
       double progress = (double) elapsedMs / duration;
       return initialThroughput + (finalThroughput - initialThroughput) * progress;
       
     case STEP:
+      if (elapsedMs >= duration) {
+        return finalThroughput;
+      }
+      if (elapsedMs <= 0) {
+        return initialThroughput;
+      }
       int stepCount = (Integer) parameters.getOrDefault("stepCount", 5);
       long stepDuration = duration / stepCount;
       int currentStep = (int) (elapsedMs / stepDuration);
@@ -172,13 +208,25 @@ public class DynamicLoadController {
       return initialThroughput + (finalThroughput - initialThroughput) * stepProgress;
       
     case SINE_WAVE:
+      if (elapsedMs >= duration) {
+        return finalThroughput;
+      }
+      if (elapsedMs <= 0) {
+        return initialThroughput;
+      }
       double amplitude = (finalThroughput - initialThroughput) / 2.0;
       double baseline = (initialThroughput + finalThroughput) / 2.0;
-      double frequency = (Double) parameters.getOrDefault("frequency", 1.0); // 完整周期数
+      double frequency = (Double) parameters.getOrDefault("frequency", 1.0);
       double phase = 2 * Math.PI * frequency * elapsedMs / duration;
       return baseline + amplitude * Math.sin(phase);
       
     case EXPONENTIAL:
+      if (elapsedMs >= duration) {
+        return finalThroughput;
+      }
+      if (elapsedMs <= 0) {
+        return initialThroughput;
+      }
       double base = (Double) parameters.getOrDefault("base", Math.E);
       double normalizedTime = (double) elapsedMs / duration;
       double expFactor = Math.pow(base, normalizedTime) - 1;
@@ -197,13 +245,25 @@ public class DynamicLoadController {
    * Calculate throughput for custom phases.
    */
   private double calculateCustomThroughput(long elapsedMs) {
+    // 如果还没开始，返回0
+    if (elapsedMs < 0) {
+      return 0.0;
+    }
+    
+    // 查找当前时间对应的phase
+    // 如果有多个phases重叠，返回最后定义的phase的throughput
+    double throughput = 0.0;
+    boolean foundPhase = false;
+    
     for (LoadPhase phase : customPhases) {
       if (elapsedMs >= phase.getStartTime() && elapsedMs < phase.getStartTime() + phase.getDuration()) {
-        return phase.getThroughput();
+        throughput = phase.getThroughput();
+        foundPhase = true;
+        // 不要break，继续查找，这样后定义的phase会覆盖前面的
       }
     }
-    // 如果没有匹配的阶段，返回最后一个阶段的吞吐量
-    return customPhases.isEmpty() ? 0.0 : customPhases.get(customPhases.size() - 1).getThroughput();
+    
+    return foundPhase ? throughput : 0.0;
   }
   
   /**
@@ -264,7 +324,6 @@ public class DynamicLoadController {
     
     DynamicLoadController controller = new DynamicLoadController(pattern, initialThroughput, finalThroughput, duration);
     
-    // 设置模式特定参数
     switch (pattern) {
     case STEP:
       int stepCount = Integer.parseInt(props.getProperty("dynamicload.stepCount", "5"));
