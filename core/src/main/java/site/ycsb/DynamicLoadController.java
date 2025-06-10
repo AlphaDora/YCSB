@@ -42,13 +42,14 @@ public class DynamicLoadController {
   }
   
   private final LoadPattern pattern;
-  private final long startTime;
+  private long startTime;
   private final double initialThroughput;
   private final double finalThroughput;
   private final long duration;
   private final Map<String, Object> parameters;
   private final AtomicReference<Double> currentThroughput;
   private final List<LoadPhase> customPhases;
+  private boolean started = false;  // 添加启动标志
   
   /**
    * Load phase definition.
@@ -89,7 +90,7 @@ public class DynamicLoadController {
   public DynamicLoadController(LoadPattern pattern, double initialThroughput, 
                               double finalThroughput, long duration) {
     this.pattern = pattern;
-    this.startTime = System.currentTimeMillis();
+    this.startTime = 0;
     this.initialThroughput = initialThroughput;
     this.finalThroughput = finalThroughput;
     this.duration = duration;
@@ -106,7 +107,7 @@ public class DynamicLoadController {
    */
   public DynamicLoadController(List<LoadPhase> phases) {
     this.pattern = LoadPattern.CUSTOM;
-    this.startTime = System.currentTimeMillis();
+    this.startTime = 0;
     this.customPhases = new ArrayList<>(phases);
     this.parameters = new HashMap<>();
     
@@ -164,9 +165,23 @@ public class DynamicLoadController {
   }
   
   /**
+   * Start the dynamic load controller. This should be called when actual load testing begins.
+   */
+  public void start() {
+    if (!started) {
+      this.startTime = System.currentTimeMillis();
+      this.started = true;
+      LOG.info("Dynamic load controller started at {}", startTime);
+    }
+  }
+  
+  /**
    * Get current target throughput.
    */
   public double getCurrentThroughput() {
+    if (!started) {
+      return initialThroughput;
+    }
     long elapsed = System.currentTimeMillis() - startTime;
     double throughput = calculateThroughput(elapsed);
     currentThroughput.set(throughput);
@@ -270,6 +285,11 @@ public class DynamicLoadController {
    * Get current phase information.
    */
   public String getCurrentPhaseInfo() {
+    if (!started) {
+      return String.format("Pattern: %s, Status: Not started, Initial throughput: %.2f ops/sec", 
+                          pattern, initialThroughput);
+    }
+    
     long elapsed = System.currentTimeMillis() - startTime;
     double throughput = getCurrentThroughput();
     
@@ -290,6 +310,9 @@ public class DynamicLoadController {
    * Check if the load pattern is completed.
    */
   public boolean isCompleted() {
+    if (!started) {
+      return false;
+    }
     return (System.currentTimeMillis() - startTime) >= duration;
   }
   

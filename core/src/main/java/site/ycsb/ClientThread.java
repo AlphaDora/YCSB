@@ -57,6 +57,9 @@ public class ClientThread implements Runnable {
   private DynamicLoadController dynamicLoadController;
   private boolean useDynamicLoad;
   private long lastThroughputUpdate;
+  // Add fields for dynamic load throttling
+  private long dynamicStartTimeNanos;
+  private int dynamicOpsDone;
 
   /**
    * Constructor.
@@ -89,6 +92,7 @@ public class ClientThread implements Runnable {
     // Initialize dynamic load control
     this.useDynamicLoad = Boolean.parseBoolean(props.getProperty("dynamicload.enabled", "false"));
     this.lastThroughputUpdate = 0;
+    this.dynamicOpsDone = 0;
     if (useDynamicLoad) {
       // Dynamic load controller will be set later by the Client
       LOG.info("Dynamic load control enabled for thread {}", threadid);
@@ -132,16 +136,22 @@ public class ClientThread implements Runnable {
       double newTotalThroughput = dynamicLoadController.getCurrentThroughput();
       double newTargetOpsPerMs = newTotalThroughput / threadcount / 1000.0;
       
+      // Only reset when throughput actually changes significantly
       if (newTargetOpsPerMs > 0 && Math.abs(newTargetOpsPerMs - targetOpsPerMs) > 0.001) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Thread {} throughput changed from {:.2f} to {:.2f} ops/ms, resetting throttling", 
+                   threadid, targetOpsPerMs, newTargetOpsPerMs);
+        }
+        
         targetOpsPerMs = newTargetOpsPerMs;
         targetOpsTickNs = (long) (1000000 / targetOpsPerMs);
-        lastThroughputUpdate = currentTime;
         
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Thread {} updated target throughput to {:.2f} ops/ms", 
-                   threadid, targetOpsPerMs);
-        }
+        // Reset dynamic throttling counters only when throughput actually changes
+        dynamicStartTimeNanos = System.nanoTime();
+        dynamicOpsDone = 0;
       }
+      
+      lastThroughputUpdate = currentTime;
     }
   }
 
@@ -205,6 +215,13 @@ public class ClientThread implements Runnable {
         long startTimeNanos = System.nanoTime();
         // Dynamic vs Static operation control
         if (useDynamicLoad && dynamicLoadController != null) {
+          // Start the dynamic load controller now that we're past warmup
+          dynamicLoadController.start();
+          
+          // Initialize dynamic throttling
+          dynamicStartTimeNanos = startTimeNanos;
+          dynamicOpsDone = 0;
+          
           // Dynamic mode: ignore opcount, run until dynamic load completes
           while (!dynamicLoadController.isCompleted() && !workload.isStopRequested()) {
             updateDynamicThroughput();
@@ -214,12 +231,12 @@ public class ClientThread implements Runnable {
             }
 
             opsdone++;
-            throttleNanos(startTimeNanos);
+            dynamicOpsDone++;
+            throttleNanosDynamic();
           }
         } else {
           // Static mode: traditional opcount-based control
           while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
-            updateDynamicThroughput();
 
             if (!workload.doTransaction(db, workloadstate)) {
               break;
@@ -234,6 +251,13 @@ public class ClientThread implements Runnable {
 
         // Dynamic vs Static operation control
         if (useDynamicLoad && dynamicLoadController != null) {
+          // Start the dynamic load controller now that we're past warmup
+          dynamicLoadController.start();
+          
+          // Initialize dynamic throttling
+          dynamicStartTimeNanos = startTimeNanos;
+          dynamicOpsDone = 0;
+          
           // Dynamic mode: ignore opcount, run until dynamic load completes
           while (!dynamicLoadController.isCompleted() && !workload.isStopRequested()) {
             updateDynamicThroughput();
@@ -243,12 +267,12 @@ public class ClientThread implements Runnable {
             }
 
             opsdone++;
-            throttleNanos(startTimeNanos);
+            dynamicOpsDone++;
+            throttleNanosDynamic();
           }
         } else {
           // Static mode: traditional opcount-based control
           while (((opcount == 0) || (opsdone < opcount)) && !workload.isStopRequested()) {
-            updateDynamicThroughput();
 
             if (!workload.doInsert(db, workloadstate)) {
               break;
@@ -289,6 +313,19 @@ public class ClientThread implements Runnable {
     if (targetOpsPerMs > 0) {
       // delay until next tick
       long deadline = startTimeNanos + opsdone * targetOpsTickNs;
+      sleepUntil(deadline);
+      measurements.setIntendedStartTimeNs(deadline);
+    }
+  }
+  
+  /**
+   * Dynamic throttling method that uses separate counters for dynamic load control.
+   */
+  private void throttleNanosDynamic() {
+    //throttle the operations for dynamic load
+    if (targetOpsPerMs > 0) {
+      // delay until next tick using dynamic counters
+      long deadline = dynamicStartTimeNanos + dynamicOpsDone * targetOpsTickNs;
       sleepUntil(deadline);
       measurements.setIntendedStartTimeNs(deadline);
     }
