@@ -49,7 +49,8 @@ public class DynamicLoadController {
   private final Map<String, Object> parameters;
   private final AtomicReference<Double> currentThroughput;
   private final List<LoadPhase> customPhases;
-  private boolean started = false;  // 添加启动标志
+  private boolean started = false;
+  private String currentPhase = null;
   
   /**
    * Load phase definition.
@@ -90,7 +91,7 @@ public class DynamicLoadController {
   public DynamicLoadController(LoadPattern pattern, double initialThroughput, 
                               double finalThroughput, long duration) {
     this.pattern = pattern;
-    this.startTime = 0;
+    this.startTime = System.currentTimeMillis();
     this.initialThroughput = initialThroughput;
     this.finalThroughput = finalThroughput;
     this.duration = duration;
@@ -107,7 +108,7 @@ public class DynamicLoadController {
    */
   public DynamicLoadController(List<LoadPhase> phases) {
     this.pattern = LoadPattern.CUSTOM;
-    this.startTime = 0;
+    this.startTime = System.currentTimeMillis();
     this.customPhases = new ArrayList<>(phases);
     this.parameters = new HashMap<>();
     
@@ -150,6 +151,7 @@ public class DynamicLoadController {
       if (timeMs >= phase.getStartTime() && timeMs < phase.getStartTime() + phase.getDuration()) {
         throughput = phase.getThroughput();
         foundPhase = true;
+        break;
         // 不要break，继续查找，这样后定义的phase会覆盖前面的
       }
     }
@@ -274,6 +276,7 @@ public class DynamicLoadController {
       if (elapsedMs >= phase.getStartTime() && elapsedMs < phase.getStartTime() + phase.getDuration()) {
         throughput = phase.getThroughput();
         foundPhase = true;
+        currentPhase = phase.getDescription();
         // 不要break，继续查找，这样后定义的phase会覆盖前面的
       }
     }
